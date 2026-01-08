@@ -1,0 +1,10 @@
+[package]
+name = "raycasting-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+pollster = "0.4.0"
+wgpu = "28.0.0"
+winit = "0.30.12"
