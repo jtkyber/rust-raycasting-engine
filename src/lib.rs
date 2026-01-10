@@ -1,6 +1,6 @@
 pub mod map;
 mod raycaster;
-mod render;
+mod renderer;
 
 use std::{mem::take, sync::Arc};
 
@@ -13,24 +13,28 @@ use winit::{
     window::Window,
 };
 
-use crate::{map::Map, raycaster::Raycaster, render::Renderer};
+use crate::{
+    map::{Map, Maps},
+    raycaster::Raycaster,
+    renderer::Renderer,
+};
 
 struct State {
     window: Arc<Window>,
-    renderer: Renderer,
     raycaster: Raycaster,
 }
 
 impl State {
-    fn new(window: Arc<Window>, maps: Arc<Vec<Map>>) -> anyhow::Result<Self> {
-        let renderer = pollster::block_on(Renderer::new(&window))?;
-        let raycaster = Raycaster::new(renderer.config(), maps.clone())?;
+    fn new(
+        window: Arc<Window>,
+        maps: Arc<Maps>,
+        current_map_key: &'static str,
+    ) -> anyhow::Result<Self> {
+        let tile_types = maps.get(current_map_key).unwrap().tile_types();
+        let renderer = pollster::block_on(Renderer::new(&window, tile_types))?;
+        let raycaster = Raycaster::new(renderer, maps.clone(), current_map_key)?;
 
-        Ok(Self {
-            window,
-            renderer,
-            raycaster,
-        })
+        Ok(Self { window, raycaster })
     }
 }
 
@@ -38,16 +42,18 @@ struct App {
     state: Option<State>,
     width: u32,
     height: u32,
-    maps: Arc<Vec<Map>>,
+    maps: Arc<Maps>,
+    current_map_key: &'static str,
 }
 
 impl App {
-    fn new(width: u32, height: u32, maps: Arc<Vec<Map>>) -> Self {
+    fn new(width: u32, height: u32, maps: Arc<Maps>, current_map_key: &'static str) -> Self {
         Self {
             state: None,
             width,
             height,
             maps,
+            current_map_key,
         }
     }
 }
@@ -57,7 +63,7 @@ impl ApplicationHandler for App {
         let window_attributes = Window::default_attributes()
             .with_inner_size(winit::dpi::LogicalSize::new(self.width, self.height));
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-        self.state = Some(State::new(window, take(&mut self.maps)).unwrap());
+        self.state = Some(State::new(window, take(&mut self.maps), self.current_map_key).unwrap());
     }
 
     fn window_event(
@@ -78,7 +84,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 state.raycaster.update();
-                state.renderer.render().unwrap();
+                // state.renderer.render().unwrap();
             }
             WindowEvent::Resized(_size) => {
                 //
@@ -99,9 +105,15 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run(window_width: u32, window_height: u32, maps: Arc<Vec<Map>>) -> anyhow::Result<()> {
+pub fn run(
+    window_width: u32,
+    window_height: u32,
+    maps: Maps,
+    current_map_key: &'static str,
+) -> anyhow::Result<()> {
+    let maps = Arc::new(maps);
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::new(window_width, window_height, maps);
+    let mut app = App::new(window_width, window_height, maps, current_map_key);
     event_loop.run_app(&mut app)?;
 
     Ok(())

@@ -5,9 +5,12 @@ mod math;
 use anyhow::Ok;
 
 use crate::{
-    map::{Map, TileType},
+    map::{Map, Maps, TileType},
     raycaster::math::{CustomMath, ray_tile_intersection},
+    renderer::Renderer,
 };
+
+const BYTES_PER_PIXEL: u8 = 4;
 
 enum AngleQuadrant {
     BottomRight,
@@ -16,7 +19,7 @@ enum AngleQuadrant {
     TopRight,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum TileSide {
     Top,
     Left,
@@ -24,7 +27,7 @@ enum TileSide {
     Right,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Position {
     x: f32,
     y: f32,
@@ -33,6 +36,7 @@ struct Position {
 struct Ray {
     len: f32,
     angle: f32,
+    fisheye_correction: f32,
     tile_index: Option<usize>,
     tile_intersection: Option<Position>,
     tile_type: Option<TileType>,
@@ -56,54 +60,79 @@ impl Ray {
     }
 }
 
+type Quad = [glam::Vec2; 4];
+
 pub(crate) struct Raycaster {
+    renderer: Renderer,
     projection_plane_width: u32,
     projection_plane_height: u32,
+    projection_plane_y_center: u32,
     tile_size: u16,
-    fov: u16,
+    wall_height: u16,
+    fov: f32,
     rays: Vec<Ray>,
-    fish_table: Vec<f32>,
     player_position: Position,
     player_rotation: f32,
-    maps: Arc<Vec<Map>>,
-    current_map_index: usize,
+    player_height: u16,
+    player_dist_to_projection_plane: f32,
+    maps: Arc<Maps>,
+    current_map_key: &'static str,
+    wall_quads: Vec<Quad>,
 }
 
 impl Raycaster {
     pub fn new(
-        config: &wgpu::SurfaceConfiguration,
-        maps: Arc<Vec<Map>>,
+        renderer: Renderer,
+        maps: Arc<Maps>,
+        current_map_key: &'static str,
     ) -> anyhow::Result<Raycaster> {
-        let fov: u16 = 60;
+        let config = renderer.config().clone();
+
+        let fov: f32 = 60.0;
+        let player_dist_to_projection_plane =
+            config.width as f32 / 2.0 / (fov.to_radians() / 2.0).tan();
         let ray_angles = get_ray_angles(fov, config.width)?;
         let fish_table = get_fish_table(config.width)?;
 
         Ok(Self {
+            renderer,
             projection_plane_width: config.width,
             projection_plane_height: config.height,
+            projection_plane_y_center: config.height / 2,
             tile_size: 64,
-            fov: fov,
+            wall_height: 64,
+            fov,
             rays: ray_angles
                 .iter()
-                .map(|a| Ray {
+                .enumerate()
+                .map(|(i, a)| Ray {
                     len: f32::INFINITY,
                     angle: *a,
+                    fisheye_correction: fish_table[i],
                     tile_index: None,
                     tile_intersection: None,
                     tile_type: None,
                     tile_side: None,
                 })
                 .collect(),
-            fish_table,
-            player_position: Position { x: 0.5, y: 0.5 },
-            player_rotation: 0.0,
+            player_position: Position { x: 100.0, y: 100.0 },
+            player_rotation: 10.0,
+            player_height: 32,
+            player_dist_to_projection_plane,
             maps: maps,
-            current_map_index: 0,
+            current_map_key,
+            wall_quads: Vec::new(),
         })
     }
 
-    pub fn update(&mut self) -> () {
-        let current_map = &self.maps[self.current_map_index];
+    pub fn update(&mut self) -> anyhow::Result<()> {
+        self.update_rays();
+
+        Ok(())
+    }
+
+    fn update_rays(&mut self) -> anyhow::Result<()> {
+        let current_map = &self.maps.get(self.current_map_key).unwrap();
         let map_size = current_map.size();
         let map_cols = map_size.cols();
         let map_rows = map_size.rows();
@@ -154,6 +183,7 @@ impl Raycaster {
             if let (Some(intersection), Some(t_index), Some(t_type), Some(t_side)) =
                 (closest, tile_index, tile_type, tile_side)
             {
+                println!("{:?}", t_side);
                 ray.update_intersection(
                     record.floor(),
                     Some(t_index),
@@ -165,11 +195,34 @@ impl Raycaster {
                 ray.update_intersection(record.floor(), None, None, None, None);
             }
         }
+
+        Ok(())
+    }
+
+    fn update_quads(&mut self) -> anyhow::Result<()> {
+        for ray in &self.rays {
+            // if let Some(_) = ray.tile_index {
+            //     continue;
+            // };
+
+            let dist = ray.len / ray.fisheye_correction;
+
+            let ratio = self.player_dist_to_projection_plane / dist;
+            let scale = (self.player_dist_to_projection_plane * self.wall_height as f32) / dist;
+            let wall_bottom =
+                ratio * self.player_height as f32 + self.projection_plane_y_center as f32;
+            let wall_top = wall_bottom - scale;
+            let wall_height = wall_bottom - wall_top;
+
+            let adjusted_angle = ray.angle + self.player_rotation.to_radians();
+            let adjusted_angle = adjusted_angle.keep_in_range(0.0, 2.0 * PI);
+        }
+
+        Ok(())
     }
 }
 
-fn get_ray_angles(fov: u16, width: u32) -> anyhow::Result<Vec<f32>> {
-    let fov = fov as f32;
+fn get_ray_angles(fov: f32, width: u32) -> anyhow::Result<Vec<f32>> {
     let ray_inc: f32 = fov / width as f32;
     let mut angle: f32 = 0.0;
     let mut ray_angles: Vec<f32> = vec![];
