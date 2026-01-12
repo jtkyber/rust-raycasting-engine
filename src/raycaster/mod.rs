@@ -3,11 +3,16 @@ mod tests;
 use std::{f32::consts::PI, sync::Arc, vec};
 mod math;
 use anyhow::Ok;
+use glam::Vec2;
+use winit::{
+    event_loop::{self, ActiveEventLoop},
+    keyboard::KeyCode,
+};
 
 use crate::{
     map::{Map, Maps, TileType},
     raycaster::math::{CustomMath, ray_tile_intersection},
-    renderer::Renderer,
+    renderer::{self, Renderer},
 };
 
 const BYTES_PER_PIXEL: u8 = 4;
@@ -21,10 +26,10 @@ enum AngleQuadrant {
 
 #[derive(Clone, Copy, Debug)]
 enum TileSide {
-    Top,
-    Left,
-    Bottom,
-    Right,
+    Top,    // 0
+    Left,   // 1
+    Bottom, // 2
+    Right,  // 3
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -33,14 +38,17 @@ struct Position {
     y: f32,
 }
 
+#[derive(Debug)]
 struct Ray {
     len: f32,
     angle: f32,
     fisheye_correction: f32,
     tile_index: Option<usize>,
     tile_intersection: Option<Position>,
+    tile_id: Option<u8>,
     tile_type: Option<TileType>,
     tile_side: Option<TileSide>,
+    tile_image_index: Option<usize>,
 }
 
 impl Ray {
@@ -51,16 +59,29 @@ impl Ray {
         tile_intersection: Option<Position>,
         tile_type: Option<TileType>,
         tile_side: Option<TileSide>,
+        tile_id: Option<u8>,
+        tile_image_index: Option<usize>,
     ) {
         self.len = len;
         self.tile_index = tile_index;
         self.tile_intersection = tile_intersection;
         self.tile_type = tile_type;
         self.tile_side = tile_side;
+        self.tile_id = tile_id;
+        self.tile_image_index = tile_image_index;
     }
 }
 
-type Quad = [glam::Vec2; 4];
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct WallInstance {
+    screen_x: f32,
+    top: f32,
+    height: f32,
+    tex_u: f32,
+    tex_layer: u32,
+    _pad: [u32; 3],
+}
 
 pub(crate) struct Raycaster {
     renderer: Renderer,
@@ -77,7 +98,6 @@ pub(crate) struct Raycaster {
     player_dist_to_projection_plane: f32,
     maps: Arc<Maps>,
     current_map_key: &'static str,
-    wall_quads: Vec<Quad>,
 }
 
 impl Raycaster {
@@ -111,8 +131,10 @@ impl Raycaster {
                     fisheye_correction: fish_table[i],
                     tile_index: None,
                     tile_intersection: None,
+                    tile_id: None,
                     tile_type: None,
                     tile_side: None,
+                    tile_image_index: None,
                 })
                 .collect(),
             player_position: Position { x: 100.0, y: 100.0 },
@@ -121,12 +143,14 @@ impl Raycaster {
             player_dist_to_projection_plane,
             maps: maps,
             current_map_key,
-            wall_quads: Vec::new(),
         })
     }
 
     pub fn update(&mut self) -> anyhow::Result<()> {
-        self.update_rays();
+        self.update_rays()?;
+        self.update_quads()?;
+
+        self.renderer.render()?;
 
         Ok(())
     }
@@ -154,10 +178,19 @@ impl Raycaster {
             };
 
             let mut tile_index: Option<usize> = None;
+            let mut tile_id: Option<u8> = None;
             let mut tile_type: Option<TileType> = None;
             let mut tile_side: Option<TileSide> = None;
             for row in 0..map_rows {
                 for col in 0..map_cols {
+                    tile_id = current_map.tile_id(row, col);
+                    tile_type = current_map.tile_type(tile_id.unwrap());
+
+                    match tile_type {
+                        Some(TileType::Wall(_)) => (),
+                        _ => continue,
+                    }
+
                     let tile_intersection = ray_tile_intersection(
                         self.player_position.x,
                         self.player_position.y,
@@ -172,27 +205,32 @@ impl Raycaster {
                         if data.dist < record {
                             record = data.dist;
                             closest = Some(data.intersection);
-                            tile_index = Some(row * map_cols + col);
-                            tile_type = current_map.tile_type(row, col);
                             tile_side = Some(data.side);
+                            tile_index = Some(row * map_cols + col);
                         }
                     }
                 }
             }
 
-            if let (Some(intersection), Some(t_index), Some(t_type), Some(t_side)) =
-                (closest, tile_index, tile_type, tile_side)
+            if let (Some(intersection), Some(t_index), Some(t_id), Some(t_type), Some(t_side)) =
+                (closest, tile_index, tile_id, tile_type, tile_side)
             {
-                println!("{:?}", t_side);
+                // println!("{:?}", tile_id);
+                let texture_index = self
+                    .renderer
+                    .get_texture_index(t_id, &renderer::TextureCategory::Wall)?;
+
                 ray.update_intersection(
                     record.floor(),
                     Some(t_index),
                     Some(intersection),
                     Some(t_type),
                     Some(t_side),
+                    Some(t_id),
+                    Some(texture_index),
                 );
             } else {
-                ray.update_intersection(record.floor(), None, None, None, None);
+                ray.update_intersection(record.floor(), None, None, None, None, None, None);
             }
         }
 
@@ -200,25 +238,77 @@ impl Raycaster {
     }
 
     fn update_quads(&mut self) -> anyhow::Result<()> {
-        for ray in &self.rays {
-            // if let Some(_) = ray.tile_index {
-            //     continue;
-            // };
+        for (i, ray) in self.rays.iter().enumerate() {
+            if let (Some(intersection), Some(tile_side), Some(tile_id)) =
+                (ray.tile_intersection, ray.tile_side, ray.tile_id)
+            {
+                let dist = ray.len / ray.fisheye_correction;
 
-            let dist = ray.len / ray.fisheye_correction;
+                let ratio = self.player_dist_to_projection_plane / dist;
+                let scale = (self.player_dist_to_projection_plane * self.wall_height as f32) / dist;
+                let wall_bottom =
+                    ratio * self.player_height as f32 + self.projection_plane_y_center as f32;
+                let wall_top = wall_bottom - scale;
+                let wall_height = wall_bottom - wall_top;
 
-            let ratio = self.player_dist_to_projection_plane / dist;
-            let scale = (self.player_dist_to_projection_plane * self.wall_height as f32) / dist;
-            let wall_bottom =
-                ratio * self.player_height as f32 + self.projection_plane_y_center as f32;
-            let wall_top = wall_bottom - scale;
-            let wall_height = wall_bottom - wall_top;
+                // let adjusted_angle = ray.angle + self.player_rotation.to_radians();
+                // let adjusted_angle = adjusted_angle.keep_in_range(0.0, 2.0 * PI);
 
-            let adjusted_angle = ray.angle + self.player_rotation.to_radians();
-            let adjusted_angle = adjusted_angle.keep_in_range(0.0, 2.0 * PI);
+                // let mut offset = match ray.tile_side {
+                //
+                // }
+
+                let use_x_for_offset =
+                    matches!(tile_side, TileSide::Top) || matches!(tile_side, TileSide::Bottom);
+
+                // Tile-local offset for texture column start
+                let offset = if use_x_for_offset {
+                    let offset_temp =
+                        (intersection.x.floor() as i32).rem_euclid(self.tile_size as i32);
+                    // Mirror
+                    (self.tile_size as i32) - offset_temp - 1
+                } else {
+                    (intersection.y.floor() as i32).rem_euclid(self.tile_size as i32)
+                } as f32;
+
+                let tex_u = (offset + 0.5) / (self.tile_size as f32);
+
+                let tex_layer = self
+                    .renderer
+                    .get_texture_index(tile_id, &renderer::TextureCategory::Wall)?;
+
+                let instance = WallInstance {
+                    screen_x: i as f32,
+                    top: wall_top as f32,
+                    height: wall_height as f32,
+                    tex_u,
+                    tex_layer: tex_layer as u32,
+                    _pad: [0u32; 3],
+                };
+
+                self.renderer.set_wall_instance(i, instance)?;
+            };
         }
 
         Ok(())
+    }
+
+    pub fn renderer(&mut self) -> &mut Renderer {
+        &mut self.renderer
+    }
+
+    pub fn handle_key(&mut self, _event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        match (code, is_pressed) {
+            (KeyCode::ArrowRight, true) => {
+                self.player_rotation += 0.01;
+                println!("RIGHT");
+            }
+            (KeyCode::ArrowLeft, true) => {
+                println!("LEFT");
+                self.player_rotation -= 0.01;
+            }
+            _ => (),
+        }
     }
 }
 

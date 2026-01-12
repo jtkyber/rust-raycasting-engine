@@ -1,4 +1,10 @@
-use image::GenericImageView;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use anyhow::Context;
+use image::{DynamicImage, GenericImageView};
 
 pub struct Texture {
     #[allow(unused)]
@@ -66,14 +72,19 @@ impl Texture {
     pub fn from_bytes_array(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        bytes_list: &Vec<&[u8]>,
+        bytes_list: &Vec<Vec<u8>>,
         label: &str,
-    ) -> anyhow::Result<Self> {
-        let mut imgs = Vec::new();
-        bytes_list
+    ) -> Option<Self> {
+        let imgs: Vec<DynamicImage> = bytes_list
             .iter()
-            .for_each(|bytes| imgs.push(image::load_from_memory(bytes).unwrap()));
-        Self::from_image_list(device, queue, &imgs, Some(label))
+            .map(|bytes| image::load_from_memory(bytes).unwrap())
+            .collect();
+
+        if imgs.is_empty() {
+            return None;
+        }
+
+        Some(Self::from_image_list(device, queue, &imgs, Some(label)).unwrap())
     }
 
     pub fn from_image(
@@ -176,7 +187,9 @@ impl Texture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
 
@@ -236,4 +249,58 @@ fn get_img_size_if_all_equal(imgs: &Vec<image::DynamicImage>) -> anyhow::Result<
         height: h,
         depth_or_array_layers: imgs.len() as u32,
     })
+}
+
+pub fn load_asset(rel_path: &str) -> anyhow::Result<Vec<u8>> {
+    // Reject absolute paths to enforce assets rooted under `res/` by default.
+    let rel_path = Path::new(rel_path);
+    if rel_path.is_absolute() {
+        anyhow::bail!(
+            "expected relative asset path, got absolute: {}",
+            rel_path.display()
+        );
+    }
+
+    // Candidate roots in order (ASSETS_DIR from build.rs, then project res, exe-res, cwd/res)
+    let candidates: Vec<PathBuf> = vec![
+        option_env!("ASSETS_DIR").map(PathBuf::from),
+        Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("res")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.join("res"))),
+        std::env::current_dir().ok().map(|cwd| cwd.join("res")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for root in candidates {
+        let full = root.join(rel_path);
+
+        // Skip if file doesn't exist at this root
+        if !full.exists() {
+            continue;
+        }
+
+        // canonicalize both root and file to protect against path traversal (..)
+        let canon_root = root
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize assets root {}", root.display()))?;
+        let canon_full = full
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize asset path {}", full.display()))?;
+
+        // Ensure the final path is inside the assets root
+        if !canon_full.starts_with(&canon_root) {
+            // This means rel_path tried to escape the assets dir.
+            continue;
+        }
+
+        // Finally read and return the bytes
+        let bytes = fs::read(&canon_full)
+            .with_context(|| format!("failed to read asset {}", canon_full.display()))?;
+        return Ok(bytes);
+    }
+
+    anyhow::bail!("asset not found: {}", rel_path.display());
 }

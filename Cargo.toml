@@ -5,10 +5,11 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-glam = "0.30.10"
+glam = { version = "0.30.10", features = ["bytemuck"] }
 pollster = "0.4.0"
 wgpu = "28.0.0"
 winit = "0.30.12"
+bytemuck = { version = "1.24.0", features = [ "derive" ] }
 
 [build-dependencies]
 anyhow = "1.0.100"

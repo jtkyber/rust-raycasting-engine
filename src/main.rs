@@ -1,5 +1,5 @@
 use raycasting_engine::{
-    map::{Map, Maps, TileType, TileTypes},
+    map::{Map, Maps, TileData, TileType, TileTypes},
     run,
 };
 
@@ -32,18 +32,8 @@ fn main() {
     ];
 
     let tile_types = TileTypes::from([
-        (
-            0,
-            TileType::Wall {
-                wall_texture_path: "walls/wall1.png",
-            },
-        ),
-        (
-            1,
-            TileType::Wall {
-                wall_texture_path: "walls/wall2.png",
-            },
-        ),
+        (0, TileType::Wall(TileData::new("walls/wall1.png"))),
+        // (6, TileType::Wall(TileData::new("walls/wall2.png"))),
     ]);
 
     let map1 = Map::new(layout, tile_types);

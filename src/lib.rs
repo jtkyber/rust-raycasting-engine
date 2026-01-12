@@ -30,8 +30,8 @@ impl State {
         maps: Arc<Maps>,
         current_map_key: &'static str,
     ) -> anyhow::Result<Self> {
-        let tile_types = maps.get(current_map_key).unwrap().tile_types();
-        let renderer = pollster::block_on(Renderer::new(&window, tile_types))?;
+        let map = maps.get(current_map_key).unwrap();
+        let renderer = pollster::block_on(Renderer::new(&window, map))?;
         let raycaster = Raycaster::new(renderer, maps.clone(), current_map_key)?;
 
         Ok(Self { window, raycaster })
@@ -83,23 +83,22 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                state.raycaster.update();
-                // state.renderer.render().unwrap();
+                state.raycaster.update().unwrap();
             }
-            WindowEvent::Resized(_size) => {
-                //
+            WindowEvent::Resized(size) => {
+                state.raycaster.renderer().resize(size.width, size.height)
             }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
-                        physical_key: PhysicalKey::Code(_code),
-                        state: _key_state,
+                        physical_key: PhysicalKey::Code(code),
+                        state: key_state,
                         ..
                     },
                 ..
-            } => {
-                //
-            }
+            } => state
+                .raycaster
+                .handle_key(event_loop, code, key_state.is_pressed()),
             _ => (),
         }
     }
