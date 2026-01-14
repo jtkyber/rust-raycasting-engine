@@ -155,31 +155,6 @@ impl Texture {
         let size = get_img_size_if_all_equal(&imgs)?;
         let layers = size.depth_or_array_layers;
 
-        let bytes_per_pixel: u32 = 4;
-        let unpadded_bytes_per_row = bytes_per_pixel * size.width;
-
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
-
-        let padded_bytes_per_image = padded_bytes_per_row * size.height;
-        let total_size = (padded_bytes_per_image * layers) as usize;
-        let mut padded_data = vec![0u8; total_size];
-
-        for (layer_index, img) in imgs.iter().enumerate() {
-            let rgba = img.to_rgba8();
-            let raw = rgba.into_raw();
-
-            for row in 0..size.height {
-                let src_offset = (row * size.width * bytes_per_pixel) as usize;
-                let dst_offset = (layer_index as u32 * padded_bytes_per_image
-                    + row * padded_bytes_per_row) as usize;
-
-                let src_slice = &raw[src_offset..src_offset + (unpadded_bytes_per_row as usize)];
-                padded_data[dst_offset..dst_offset + (unpadded_bytes_per_row as usize)]
-                    .copy_from_slice(src_slice);
-            }
-        }
-
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label,
             size,
@@ -193,21 +168,37 @@ impl Texture {
             view_formats: &[],
         });
 
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfoBase {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &padded_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(size.height),
-            },
-            size,
-        );
+        for (i, img) in imgs.iter().enumerate() {
+            let rgba = img.to_rgba8();
+            let raw = rgba.as_raw();
+
+            let bytes_per_row = 4 * size.width;
+            let rows_per_image = size.height;
+
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfoBase {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: i as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                raw,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(rows_per_image),
+                },
+                wgpu::Extent3d {
+                    width: size.width,
+                    height: size.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),

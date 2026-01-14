@@ -1,9 +1,14 @@
 mod texture;
-use std::{collections::HashMap, fs, mem, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs, mem,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Ok;
 use glam::{Vec2, vec2};
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, wgc::pipeline};
 use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
@@ -73,6 +78,8 @@ pub(crate) struct Renderer {
     textures: Textures,
     tile_texture_maps: TileTextureMaps,
     wall_instances: Vec<WallInstance>,
+    last_frame_time: Option<Instant>,
+    delta_time: Duration,
 }
 
 impl Renderer {
@@ -200,7 +207,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: Some(wgpu::Face::Back),
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
@@ -231,17 +238,20 @@ impl Renderer {
             textures,
             tile_texture_maps,
             wall_instances,
+            last_frame_time: Some(Instant::now()),
+            delta_time: Duration::default(),
         })
     }
 
     pub fn render(&mut self) -> anyhow::Result<()> {
         self.window.request_redraw();
 
+        let now = Instant::now();
+        self.delta_time = Instant::now() - self.last_frame_time.unwrap_or(now);
+
         if !self.is_surface_configured {
             return Ok(());
         }
-
-        self.wall_instances.clear();
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -277,7 +287,6 @@ impl Renderer {
                 multiview_mask: None,
             });
 
-            // println!("{:?}", self.wall_instances);
             self.queue.write_buffer(
                 &self.quad_instance_buffer,
                 0,
@@ -299,14 +308,13 @@ impl Renderer {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
+        self.wall_instances.clear();
+        self.last_frame_time = Some(now);
+
         Ok(())
     }
 
-    pub fn set_wall_instance(
-        &mut self,
-        index: usize,
-        instance: WallInstance,
-    ) -> anyhow::Result<()> {
+    pub fn set_wall_instance(&mut self, instance: WallInstance) -> anyhow::Result<()> {
         self.wall_instances.push(instance);
 
         Ok(())
@@ -335,6 +343,10 @@ impl Renderer {
                 .unwrap()),
         }
     }
+
+    pub fn delta_time(&self) -> Duration {
+        self.delta_time
+    }
 }
 
 async fn wgpu_init(
@@ -351,7 +363,9 @@ async fn wgpu_init(
         ..Default::default()
     });
 
-    let surface = instance.create_surface(window.clone()).unwrap();
+    let surface = instance
+        .create_surface(window.clone())
+        .expect("Failed to create surface");
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {

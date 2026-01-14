@@ -5,6 +5,7 @@ mod math;
 use anyhow::Ok;
 use glam::Vec2;
 use winit::{
+    dpi::PhysicalPosition,
     event_loop::{self, ActiveEventLoop},
     keyboard::KeyCode,
 };
@@ -80,24 +81,33 @@ pub(crate) struct WallInstance {
     height: f32,
     tex_u: f32,
     tex_layer: u32,
-    _pad: [u32; 3],
+    // _pad: [u32; 3],
+}
+
+struct PlayerController {
+    key_forward: bool,
+    key_back: bool,
+    key_left: bool,
+    key_right: bool,
 }
 
 pub(crate) struct Raycaster {
     renderer: Renderer,
     projection_plane_width: u32,
     projection_plane_height: u32,
-    projection_plane_y_center: u32,
+    projection_plane_y_center: f32,
     tile_size: u16,
     wall_height: u16,
     fov: f32,
     rays: Vec<Ray>,
     player_position: Position,
     player_rotation: f32,
+    player_move_dir: f32,
     player_height: u16,
     player_dist_to_projection_plane: f32,
     maps: Arc<Maps>,
     current_map_key: &'static str,
+    player_controller: PlayerController,
 }
 
 impl Raycaster {
@@ -118,7 +128,7 @@ impl Raycaster {
             renderer,
             projection_plane_width: config.width,
             projection_plane_height: config.height,
-            projection_plane_y_center: config.height / 2,
+            projection_plane_y_center: config.height as f32 / 2.0,
             tile_size: 64,
             wall_height: 64,
             fov,
@@ -139,14 +149,24 @@ impl Raycaster {
                 .collect(),
             player_position: Position { x: 100.0, y: 100.0 },
             player_rotation: 10.0,
+            player_move_dir: 10.0,
             player_height: 32,
             player_dist_to_projection_plane,
             maps: maps,
             current_map_key,
+
+            player_controller: PlayerController {
+                key_forward: false,
+                key_back: false,
+                key_left: false,
+                key_right: false,
+            },
         })
     }
 
     pub fn update(&mut self) -> anyhow::Result<()> {
+        self.update_positions()?;
+
         self.update_rays()?;
         self.update_quads()?;
 
@@ -183,10 +203,10 @@ impl Raycaster {
             let mut tile_side: Option<TileSide> = None;
             for row in 0..map_rows {
                 for col in 0..map_cols {
-                    tile_id = current_map.tile_id(row, col);
-                    tile_type = current_map.tile_type(tile_id.unwrap());
+                    let tile_id_temp = current_map.tile_id(row, col);
+                    let tile_type_temp = current_map.tile_type(tile_id_temp.unwrap());
 
-                    match tile_type {
+                    match tile_type_temp {
                         Some(TileType::Wall(_)) => (),
                         _ => continue,
                     }
@@ -207,6 +227,8 @@ impl Raycaster {
                             closest = Some(data.intersection);
                             tile_side = Some(data.side);
                             tile_index = Some(row * map_cols + col);
+                            tile_id = tile_id_temp;
+                            tile_type = tile_type_temp;
                         }
                     }
                 }
@@ -215,7 +237,6 @@ impl Raycaster {
             if let (Some(intersection), Some(t_index), Some(t_id), Some(t_type), Some(t_side)) =
                 (closest, tile_index, tile_id, tile_type, tile_side)
             {
-                // println!("{:?}", tile_id);
                 let texture_index = self
                     .renderer
                     .get_texture_index(t_id, &renderer::TextureCategory::Wall)?;
@@ -273,6 +294,7 @@ impl Raycaster {
 
                 let tex_u = (offset + 0.5) / (self.tile_size as f32);
 
+                // if tile_id != 0 { println!("{}", tile_id);
                 let tex_layer = self
                     .renderer
                     .get_texture_index(tile_id, &renderer::TextureCategory::Wall)?;
@@ -283,10 +305,10 @@ impl Raycaster {
                     height: wall_height as f32,
                     tex_u,
                     tex_layer: tex_layer as u32,
-                    _pad: [0u32; 3],
+                    // _pad: [0u32; 3],
                 };
 
-                self.renderer.set_wall_instance(i, instance)?;
+                self.renderer.set_wall_instance(instance)?;
             };
         }
 
@@ -297,18 +319,105 @@ impl Raycaster {
         &mut self.renderer
     }
 
-    pub fn handle_key(&mut self, _event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+    fn move_dir(&self) -> f32 {
+        let PlayerController {
+            key_forward,
+            key_back,
+            key_left,
+            key_right,
+        } = self.player_controller;
+
+        if key_forward && !key_right && !key_left {
+            // forward
+            self.player_rotation
+        } else if key_back && !key_right && !key_left {
+            // backwards
+            self.player_rotation + 180.0
+        } else if key_right && !key_forward && !key_back {
+            // right
+            self.player_rotation + 90.0
+        } else if key_left && !key_forward && !key_back {
+            // left
+            self.player_rotation - 90.0
+        } else if key_forward && key_right {
+            // forward-right
+            self.player_rotation + 45.0
+        } else if key_forward && key_left {
+            // forward-left
+            self.player_rotation - 45.0
+        } else if key_back && key_right {
+            // backwards-right
+            self.player_rotation + 135.0
+        } else if key_back && key_left {
+            // backwards-left
+            self.player_rotation - 135.0
+        } else {
+            self.player_rotation
+        }
+    }
+
+    pub fn update_positions(&mut self) -> anyhow::Result<()> {
+        let delta_time = self.renderer.delta_time().as_secs_f32();
+        let move_speed = 150.0 * delta_time;
+
+        let move_dir = self.move_dir().keep_in_range(0.0, 360.0).to_radians();
+
+        if self.player_controller.key_forward
+            || self.player_controller.key_back
+            || self.player_controller.key_left
+            || self.player_controller.key_right
+        {
+            self.player_position.x += move_speed * move_dir.cos();
+            self.player_position.y += move_speed * move_dir.sin();
+        };
+
+        Ok(())
+    }
+
+    pub fn handle_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        let delta_time = self.renderer.delta_time().as_secs_f32();
+
         match (code, is_pressed) {
-            (KeyCode::ArrowRight, true) => {
-                self.player_rotation += 0.01;
-                println!("RIGHT");
+            (KeyCode::Escape, true) => {
+                println!("App Closed via Esc key");
+                event_loop.exit();
             }
-            (KeyCode::ArrowLeft, true) => {
-                println!("LEFT");
-                self.player_rotation -= 0.01;
+            // Forward
+            (KeyCode::KeyW, true) => {
+                self.player_controller.key_forward = true;
             }
+            (KeyCode::KeyW, false) => {
+                self.player_controller.key_forward = false;
+            }
+            // Backward
+            (KeyCode::KeyS, true) => {
+                self.player_controller.key_back = true;
+            }
+            (KeyCode::KeyS, false) => {
+                self.player_controller.key_back = false;
+            }
+            // Right
+            (KeyCode::KeyD, true) => {
+                self.player_controller.key_right = true;
+            }
+            (KeyCode::KeyD, false) => {
+                self.player_controller.key_right = false;
+            }
+            // Left
+            (KeyCode::KeyA, true) => {
+                self.player_controller.key_left = true;
+            }
+            (KeyCode::KeyA, false) => {
+                self.player_controller.key_left = false;
+            }
+
             _ => (),
         }
+    }
+
+    pub fn handle_cursor_move(&mut self, delta: (f64, f64)) {
+        self.player_rotation += delta.0 as f32 / 40.0;
+        self.projection_plane_y_center -= delta.1 as f32 / 4.0;
     }
 }
 

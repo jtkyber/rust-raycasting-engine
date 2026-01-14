@@ -33,11 +33,11 @@ fn main() {
 
     let tile_types = TileTypes::from([
         (0, TileType::Wall(TileData::new("walls/wall1.png"))),
-        // (6, TileType::Wall(TileData::new("walls/wall2.png"))),
+        (3, TileType::Wall(TileData::new("walls/wall3.png"))),
     ]);
 
     let map1 = Map::new(layout, tile_types);
     let maps = Maps::from([("Map1", map1)]);
 
-    run(1920, 1080, maps, "Map1").unwrap();
+    run(854, 480, maps, "Map1").unwrap();
 }

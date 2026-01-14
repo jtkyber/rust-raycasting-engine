@@ -7,10 +7,10 @@ use std::{mem::take, sync::Arc};
 use anyhow::Ok;
 use winit::{
     application::ApplicationHandler,
-    event::{KeyEvent, WindowEvent},
+    event::{DeviceEvent, KeyEvent, WindowEvent},
     event_loop::EventLoop,
     keyboard::PhysicalKey,
-    window::Window,
+    window::{CursorIcon, Fullscreen, Window},
 };
 
 use crate::{
@@ -61,9 +61,39 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window_attributes = Window::default_attributes()
-            .with_inner_size(winit::dpi::LogicalSize::new(self.width, self.height));
+            .with_inner_size(winit::dpi::LogicalSize::new(self.width, self.height))
+            .with_resizable(false)
+            // .with_fullscreen(Some(Fullscreen::Borderless(None)));
+            .with_fullscreen(None);
+
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+
+        // lock cursor
+        window
+            .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+            .unwrap();
+        window.set_cursor_visible(false);
+
         self.state = Some(State::new(window, take(&mut self.maps), self.current_map_key).unwrap());
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        let state = match &mut self.state {
+            Some(canvas) => canvas,
+            None => return,
+        };
+
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                state.raycaster.handle_cursor_move(delta);
+            }
+            _ => (),
+        }
     }
 
     fn window_event(

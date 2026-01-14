@@ -27,7 +27,7 @@ pub(crate) fn ray_line_intersection(
     ly2: f32,
 ) -> Option<Position> {
     let rx2 = rx1 + r * ray_angle.cos();
-    let ry2 = rx1 + r * ray_angle.sin();
+    let ry2 = ry1 + r * ray_angle.sin();
 
     let denom = (lx1 - lx2) * (ry1 - ry2) - (ly1 - ly2) * (rx1 - rx2);
 
