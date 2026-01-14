@@ -1,7 +1,7 @@
 mod texture;
 use std::{
     collections::HashMap,
-    fs, mem,
+    mem,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -119,7 +119,8 @@ impl Renderer {
             },
         ];
 
-        let wall_instances = Vec::with_capacity(config.width as usize);
+        let wall_instances = vec![WallInstance::default(); config.width as usize];
+
         let quad_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Quad Vertex Buffer"),
             contents: bytemuck::cast_slice(&VERTICES),
@@ -308,14 +309,17 @@ impl Renderer {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        self.wall_instances.clear();
         self.last_frame_time = Some(now);
 
         Ok(())
     }
 
-    pub fn set_wall_instance(&mut self, instance: WallInstance) -> anyhow::Result<()> {
-        self.wall_instances.push(instance);
+    pub fn set_wall_instance(
+        &mut self,
+        index: usize,
+        instance: WallInstance,
+    ) -> anyhow::Result<()> {
+        self.wall_instances[index] = instance;
 
         Ok(())
     }
@@ -369,7 +373,7 @@ async fn wgpu_init(
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
+            power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         })

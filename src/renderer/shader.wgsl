@@ -17,8 +17,8 @@ struct VertexOutput {
     @location(1) tex_layer: u32,
 };
 
-const SCREEN_W = 854;
-const SCREEN_H = 480;
+const SCREEN_W = 1280;
+const SCREEN_H = 720;
 
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {

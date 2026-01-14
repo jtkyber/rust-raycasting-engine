@@ -39,6 +39,29 @@ struct Position {
     y: f32,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct WallInstance {
+    screen_x: f32,
+    top: f32,
+    height: f32,
+    tex_u: f32,
+    tex_layer: u32,
+    // _pad: [u32; 3],
+}
+
+impl Default for WallInstance {
+    fn default() -> Self {
+        Self {
+            screen_x: 0.0,
+            top: 0.0,
+            height: 0.0,
+            tex_u: 0.0,
+            tex_layer: 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Ray {
     len: f32,
@@ -71,17 +94,6 @@ impl Ray {
         self.tile_id = tile_id;
         self.tile_image_index = tile_image_index;
     }
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct WallInstance {
-    screen_x: f32,
-    top: f32,
-    height: f32,
-    tex_u: f32,
-    tex_layer: u32,
-    // _pad: [u32; 3],
 }
 
 struct PlayerController {
@@ -308,7 +320,10 @@ impl Raycaster {
                     // _pad: [0u32; 3],
                 };
 
-                self.renderer.set_wall_instance(instance)?;
+                self.renderer.set_wall_instance(i, instance)?;
+            } else {
+                self.renderer
+                    .set_wall_instance(i, WallInstance::default())?;
             };
         }
 

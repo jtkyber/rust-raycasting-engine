@@ -39,5 +39,5 @@ fn main() {
     let map1 = Map::new(layout, tile_types);
     let maps = Maps::from([("Map1", map1)]);
 
-    run(854, 480, maps, "Map1").unwrap();
+    run(1280, 720, maps, "Map1").unwrap();
 }
